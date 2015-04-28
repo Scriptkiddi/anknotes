@@ -54,7 +54,7 @@ class Anki:
             collection.addNote(note)
             collection.autosave()
             self.startEditing()
-            showTooltip("Note added.", 1000);
+            show_tooltip("Note added.", 1000);
             return note.id
 
     def createNote(self, deckName, modelName, fields, tags=list()):
@@ -117,7 +117,7 @@ class Anki:
     def getCardsIdFromTag(self,tag):
         query="tag:"+tag
         ids = self.collection().findCards(query)
-        showTooltip(ids)
+        show_tooltip(ids)
         return ids
 
 
@@ -144,39 +144,44 @@ class Anki:
 
 
 class EvernoteCard:
-    front=""
-    back=""
-    guid=""
-    def __init__(self, q, a,g):
-        self.front=q
-        self.back=a
-        self.guid=g
+    front = ""
+    back = ""
+    guid = ""
+    def __init__(self, q, a, g):
+        self.front = q
+        self.back = a
+        self.guid = g
 
 class Evernote:
 
-    def __init__(self,token):
+    def __init__(self, token):
         if not mw.col.conf.get('evernoteToken', False):
             #First run of the Plugin we did not save the access key yet
             client = EvernoteClient(
                 consumer_key='scriptkiddi-2682',
                 consumer_secret='965f1873e4df583c',
-                sandbox=True
+                sandbox=False
             )
             request_token = client.get_request_token('https://fap-studios.de/anknotes/index.html')
             url = client.get_authorize_url(request_token)
-            showInfo("We will open a Evernote Tab in your browser so you can allow acces to your account")
+            showInfo("We will open a Evernote Tab in your browser so you can allow access to your account")
             openLink(url)
             oauth_verifier = getText(prompt="Please copy the code that showed up, after allowing access, in here")[0]
             auth_token = client.get_access_token(
-                        request_token.get('oauth_token'),
-                        request_token.get('oauth_token_secret'),
-                        oauth_verifier
-                    )
-            mw.col.conf['evernoteToken'] = auth_token
+                request_token.get('oauth_token'),
+                request_token.get('oauth_token_secret'),
+                oauth_verifier)
+            print(auth_token)
+            if not auth_token:
+                showInfo("Something went wrong please try again.")
+            else:
+                mw.col.conf['evernoteToken'] = auth_token
+                mw.col.save()
         else:
             auth_token = mw.col.conf.get('evernoteToken', False)
-        self.client= EvernoteClient(token=auth_token, sandbox=True)
-        self.noteStore=self.client.get_note_store()
+        self.token = auth_token
+        self.client = EvernoteClient(token=auth_token, sandbox=False)
+        self.noteStore = self.client.get_note_store()
 
     def parse_query_string(self, authorize_url):
         """Extract the oauth_verifier from the passed url."""
@@ -189,29 +194,35 @@ class Evernote:
             vals.update({key:value})
         return vals
 
-    def findTagGuid(self,tag):
-        listtags = self.noteStore.listTags()
-        for evtag in listtags:
-            if(evtag.name==tag):
+    def find_tag_guid(self, tag):
+        list_tags = self.noteStore.listTags()
+
+        for evtag in list_tags:
+
+            if str(evtag.name).strip() == str(tag).strip():
                 return evtag.guid
 
-    def createEvernoteCards(self,guidSet):
-        cards=[]
-        for g in guidSet:
-            title,content=self.getNoteInformations(g)
-            cards.append(EvernoteCard(title,content,g))
+    def create_evernote_cards(self, guid_set):
+        cards = []
+        print(guid_set)
+        print("test5")
+        for g in guid_set:
+            title, content = self.getNoteInformations(g)
+            print(g)
+            print("test7")
+            cards.append(EvernoteCard(title, content, g))
+        print("test6")
         return cards
 
-
-    def findNotesFilterByTagGuids(self,guidsList):
-        Evfilter = NoteFilter()
-        Evfilter.ascending = False
-        Evfilter.tagGuids = guidsList
+    def find_notes_filter_by_tag_guids(self, guids_list):
+        evernote_filter = NoteFilter()
+        evernote_filter.ascending = False
+        evernote_filter.tagGuids = guids_list
         spec = NotesMetadataResultSpec()
         spec.includeTitle = True
-        noteList=self.noteStore.findNotesMetadata(self.token, Evfilter, 0, 10000, spec)
-        guids=[]
-        for note in noteList.notes:
+        note_list = self.noteStore.findNotesMetadata(self.token, evernote_filter, 0, 10000, spec)
+        guids = []
+        for note in note_list.notes:
             guids.append(note.guid)
             print(note.guid)
         return guids
@@ -223,44 +234,48 @@ class Evernote:
 
 class Controller:
     def __init__(self):
-        self.evernoteTags=mw.col.conf.get('evernoteTagsToImport', "").split(",")
-        self.ankiTag=mw.col.conf.get('evernoteDefaultTag', "")
-        self.evernoteToken=mw.col.conf.get('evernoteDevKey', "")
-        self.keepTags= mw.col.conf.get('evernoteKeepTags', False)=="True"
+        self.evernoteTags = mw.col.conf.get('evernoteTagsToImport', "").split(",")
+        self.ankiTag = mw.col.conf.get('evernoteDefaultTag', "")
+        self.evernoteToken = mw.col.conf.get('evernoteDevKey', "")
+        self.keepTags = mw.col.conf.get('evernoteKeepTags', False) == "True"
         self.deck = mw.col.conf.get('evernoteDefaultDeck', "")
         self.anki = Anki()
         self.anki.add_evernote_model()
         self.evernote = Evernote(self.evernoteToken)
 
     def proceed(self):
-        anki_ids=self.anki.getCardsIdFromTag(self.ankiTag)
-        anki_guids=self.anki.getGuidsFromAnkiId(anki_ids)
-        evernote_guids=self.getEvernoteGuidsFromTag(self.evernoteTags)
-        if (ONLY_ADD_NEW):
-            noteGuidsToImport=set(evernote_guids)-set(anki_guids)
-            n=self.ImportIntoAnki(noteGuidsToImport,self.deck,self.ankiTag)
-            showTooltip(str(n) +" cards have been imported")
+        anki_ids = self.anki.getCardsIdFromTag(self.ankiTag)
+        anki_guids = self.anki.getGuidsFromAnkiId(anki_ids)
+        evernote_guids = self.get_evernote_guids_from_tag(self.evernoteTags)
+        if ONLY_ADD_NEW:
+            note_guids_to_import = set(evernote_guids)-set(anki_guids)
+            print("test1")
+            n = self.import_into_anki(note_guids_to_import, self.deck, self.ankiTag)
+            print("test2")
+            show_tooltip(str(n) +" cards have been imported")
 
-
-    def ImportIntoAnki(self,guidSet,deck,tag):
-        cards=self.evernote.createEvernoteCards(guidSet)
-        number=self.anki.addEvernoteCards(cards,deck,tag)
+    def import_into_anki(self, guid_set, deck, tag):
+        cards = self.evernote.create_evernote_cards(guid_set)
+        print("test3")
+        number = self.anki.addEvernoteCards(cards, deck, tag)
+        print("test4")
         return number
 
-
-    def getEvernoteGuidsFromTag(self,tags):
-        noteGuids=[]
+    def get_evernote_guids_from_tag(self, tags):
+        note_guids = []
         for tag in tags:
-            tagGuid=self.evernote.findTagGuid(tag)
-            if(tagGuid is not None):
-                noteGuids=noteGuids+self.evernote.findNotesFilterByTagGuids([tagGuid])
-        return noteGuids
+            tag_guid = self.evernote.find_tag_guid(tag)
+            if tag_guid is not None:
+                note_guids = note_guids+self.evernote.find_notes_filter_by_tag_guids([tag_guid])
+        return note_guids
 
-def showTooltip(text, timeOut=3000):
-    aqt.utils.tooltip(text, timeOut)
+
+def show_tooltip(text, time_out=3000):
+    aqt.utils.tooltip(text, time_out)
+
 
 def main():
-    showTooltip(str())
+    show_tooltip(str())
     controller=Controller()
     controller.proceed()
 
